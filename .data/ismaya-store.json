@@ -1,0 +1,97 @@
+{
+  "users": [
+    {
+      "id": "usr_admin_01",
+      "username": "ismaya.admin",
+      "displayName": "Administrator Utama",
+      "role": "admin",
+      "active": true,
+      "passwordSalt": "7e731e76f63d4f761904162ef159f040",
+      "passwordHash": "0c26ff4089f529cf37c326984a51ae5f10bb7e18e2aec1d74bc39e41aef450b88372e6e82bed3aeb03ec3074ce15448e93ff85fc4ddc8536f1d1afde58dc5cf4",
+      "tokenVersion": 1,
+      "createdAt": "2026-11-13T02:46:29.341Z",
+      "updatedAt": "2026-11-13T02:46:29.341Z",
+      "lastLoginAt": "2026-11-13T02:48:56.207Z"
+    },
+    {
+      "id": "usr_admin_env",
+      "username": "Ismaya1234",
+      "displayName": "Administrator",
+      "role": "admin",
+      "active": true,
+      "passwordSalt": "268e43c80a04276f24b5a73bd3e4782c",
+      "passwordHash": "cf6c3010da25ed6bae6dd97c05314f9c0514f4e461caa0feb1b08b57366e824ad1170fa532d3d550482e18bf3cc0014cd45e592c3ce18a1cc4caa2512a02652c",
+      "tokenVersion": 1,
+      "createdAt": "2026-11-13T02:46:29.341Z",
+      "updatedAt": "2026-11-13T02:46:29.341Z",
+      "lastLoginAt": null
+    }
+  ],
+  "logs": [
+    {
+      "id": "log_07b9bbbc9e28",
+      "timestamp": "2026-11-13T02:48:58.517Z",
+      "actorUsername": "ismaya.admin",
+      "actorDisplayName": "Administrator Utama",
+      "actorRole": "admin",
+      "category": "spreadsheet_sync",
+      "action": "SPREADSHEET_BASELINE_SYNCED",
+      "description": "Sinkronisasi awal Google Spreadsheet selesai (6 tab kategori).",
+      "details": "Signature: c1b6c3f2aecbbc63"
+    },
+    {
+      "id": "log_8376983a477f",
+      "timestamp": "2026-11-13T02:48:56.207Z",
+      "actorUsername": "ismaya.admin",
+      "actorDisplayName": "Administrator Utama",
+      "actorRole": "admin",
+      "category": "auth",
+      "action": "USER_LOGIN",
+      "description": "Administrator Utama (@ismaya.admin) berhasil masuk ke sistem."
+    },
+    {
+      "id": "log_756aeff9049d",
+      "timestamp": "2026-11-13T02:46:37.194Z",
+      "actorUsername": "ismaya.admin",
+      "actorDisplayName": "Administrator Utama",
+      "actorRole": "admin",
+      "category": "auth",
+      "action": "USER_LOGIN",
+      "description": "Administrator Utama (@ismaya.admin) berhasil masuk ke sistem."
+    },
+    {
+      "id": "log_5a0c08379507",
+      "timestamp": "2026-11-13T02:46:29.482Z",
+      "actorUsername": "ismaya.admin",
+      "actorDisplayName": "Administrator Utama",
+      "actorRole": "admin",
+      "category": "auth",
+      "action": "USER_LOGIN",
+      "description": "Administrator Utama (@ismaya.admin) berhasil masuk ke sistem."
+    },
+    {
+      "id": "log_cef0fe273bbf",
+      "timestamp": "2026-11-13T02:46:29.341Z",
+      "actorUsername": "system",
+      "actorDisplayName": "System",
+      "actorRole": "system",
+      "category": "auth",
+      "action": "SYSTEM_INITIALIZED",
+      "description": "Sistem ledger pembayaran tanah ISMAYA PROPERTY diinisialisasi."
+    }
+  ],
+  "lastSheetSignature": "c1b6c3f2aecbbc63",
+  "lastSheetSummary": {
+    "totalPaid": 3017644110,
+    "remainingBalance": 1682355890,
+    "tabCount": 6,
+    "rowCounts": {
+      "Rekapitulasi": 112,
+      "Pak Teguh": 22,
+      "Pak Kukuh": 51,
+      "Pak Agung": 8,
+      "Ibu Iweng": 22,
+      "Kerohiman Bu Erna": 19
+    }
+  }
+}

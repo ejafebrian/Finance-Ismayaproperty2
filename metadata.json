@@ -1,0 +1,6 @@
+{
+  "name": "ISMAYA PROPERTY — Land Payment Ledger",
+  "description": "Real-time installment monitoring, Google Sheets sync, PDF reporting, and administrator audit ledger for Utan Kayu land payments.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
