@@ -320,6 +320,8 @@ export default function AdminPanel({
         return copy.admin.catSync;
       case 'export':
         return copy.admin.catExport;
+      case 'reconciliation':
+        return copy.admin.catReconciliation;
     }
   };
 
@@ -787,6 +789,7 @@ export default function AdminPanel({
           <option value="credentials">{copy.admin.catCredentials}</option>
           <option value="user_management">{copy.admin.catUsers}</option>
           <option value="spreadsheet_sync">{copy.admin.catSync}</option>
+          <option value="reconciliation">{copy.admin.catReconciliation}</option>
           <option value="export">{copy.admin.catExport}</option>
         </select>
       </div>

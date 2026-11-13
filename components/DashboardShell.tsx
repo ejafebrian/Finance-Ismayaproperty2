@@ -4,7 +4,9 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import Image from 'next/image';
 import {
   Activity,
+  AlertTriangle,
   ArrowUpRight,
+  CheckCircle2,
   ChevronDown,
   Clock,
   Download,
@@ -16,6 +18,7 @@ import {
   Menu,
   Moon,
   RefreshCw,
+  Scale,
   Search,
   Sun,
   Users,
@@ -26,6 +29,7 @@ import { formatRupiah } from '@/lib/format';
 import { authFetch } from '@/lib/client-auth';
 import {
   exportAllTabsToPdf,
+  exportReconciliationToPdf,
   exportRekapSubSectionToPdf,
   exportTabToPdf,
 } from '@/lib/pdf-export';
@@ -33,11 +37,13 @@ import type {
   Language,
   ParsedSheetTab,
   PublicUser,
+  ReconciliationAdjustment,
   SpreadsheetSnapshot,
   ThemeMode,
 } from '@/lib/types';
 import ChartsPanel from './ChartsPanel';
 import AdminPanel, { type AdminSectionTab } from './AdminPanel';
+import ReconciliationPanel from './ReconciliationPanel';
 
 const LOGO_SRC = '/assets/aistudio/436288cc-2e74-4fc9-b640-0cf371e4aa32_53fea3f7.png';
 const AUTO_SYNC_INTERVAL_SEC = 15;
@@ -55,6 +61,7 @@ interface DashboardShellProps {
 
 type ActiveView =
   | { kind: 'sheet'; gid: string }
+  | { kind: 'reconciliation' }
   | { kind: 'admin'; section: AdminSectionTab };
 
 export default function DashboardShell({
@@ -70,6 +77,7 @@ export default function DashboardShell({
   const copy = getCopy(lang);
 
   const [snapshot, setSnapshot] = useState<SpreadsheetSnapshot | null>(null);
+  const [adjustments, setAdjustments] = useState<ReconciliationAdjustment[]>([]);
   const [loadingSheet, setLoadingSheet] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState('');
@@ -161,7 +169,10 @@ export default function DashboardShell({
     let cancelled = false;
     (async () => {
       try {
-        const res = await authFetch('/api/sheets', { cache: 'no-store' });
+        const [res, adjRes] = await Promise.all([
+          authFetch('/api/sheets', { cache: 'no-store' }),
+          authFetch('/api/reconciliation', { cache: 'no-store' }).catch(() => null),
+        ]);
         if (res.status === 401) {
           onLogout();
           return;
@@ -172,6 +183,12 @@ export default function DashboardShell({
         const nextSnap = data.snapshot as SpreadsheetSnapshot;
         setSnapshot(nextSnap);
         setCountdown(AUTO_SYNC_INTERVAL_SEC);
+        if (adjRes && adjRes.ok) {
+          const adjData = await adjRes.json().catch(() => ({}));
+          if (!cancelled && Array.isArray(adjData.adjustments)) {
+            setAdjustments(adjData.adjustments);
+          }
+        }
         setActiveView((prev) => {
           if (prev.kind === 'sheet') {
             const exists = nextSnap.tabs.some((t) => t.meta.gid === prev.gid);
@@ -338,10 +355,37 @@ export default function DashboardShell({
     );
   };
 
+  const reconciliationOverview = useMemo(() => {
+    if (!snapshot?.reconciliation) {
+      return { allKlop: true, klopCount: 0, totalChecks: 0, netVariance: 0 };
+    }
+    const adjMap = new Map(adjustments.map((a) => [a.checkId, a]));
+    let klopCount = 0;
+    let netVariance = 0;
+    for (const c of snapshot.reconciliation.checks) {
+      const adj = adjMap.get(c.id);
+      const diff = Math.round(c.actualAmount + (adj ? adj.nominalDelta : 0) - c.expectedAmount);
+      if (diff === 0) klopCount++;
+      netVariance += Math.abs(diff);
+    }
+    const totalChecks = snapshot.reconciliation.checks.length;
+    return {
+      allKlop: totalChecks > 0 && klopCount === totalChecks,
+      klopCount,
+      totalChecks,
+      netVariance,
+    };
+  }, [snapshot, adjustments]);
+
   const selectSheetTab = (gid: string) => {
     setActiveView({ kind: 'sheet', gid });
     setSearchQuery('');
     setSelectedYear('all');
+    setMobileMenuOpen(false);
+  };
+
+  const selectReconciliation = () => {
+    setActiveView({ kind: 'reconciliation' });
     setMobileMenuOpen(false);
   };
 
@@ -353,11 +397,13 @@ export default function DashboardShell({
   const activeBreadcrumbLabel =
     activeView.kind === 'sheet'
       ? activeTab?.meta.name || '...'
-      : activeView.section === 'profile'
-        ? copy.nav.accountSecurity
-        : activeView.section === 'users'
-          ? copy.nav.userManagement
-          : copy.nav.activityLog;
+      : activeView.kind === 'reconciliation'
+        ? copy.nav.reconciliation
+        : activeView.section === 'profile'
+          ? copy.nav.accountSecurity
+          : activeView.section === 'users'
+            ? copy.nav.userManagement
+            : copy.nav.activityLog;
 
   const sidebarContent = (
     <div className="flex flex-col h-full justify-between">
@@ -431,6 +477,36 @@ export default function DashboardShell({
               </button>
             );
           })}
+
+          <button
+            type="button"
+            onClick={selectReconciliation}
+            className={`w-full min-h-[42px] px-3 py-2 rounded-lg text-left text-sm font-medium flex items-center justify-between gap-2 transition-colors mt-2 ${
+              activeView.kind === 'reconciliation'
+                ? 'bg-slate-900 text-white dark:bg-[#C5AE6B] dark:text-slate-950'
+                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/70'
+            }`}
+          >
+            <span className="flex items-center gap-2.5 min-w-0">
+              <Scale className="w-4 h-4 shrink-0 opacity-80" />
+              <span className="truncate">{copy.nav.reconciliation}</span>
+            </span>
+            {snapshot && (
+              <span
+                className={`text-[11px] font-mono tabular-nums shrink-0 ${
+                  activeView.kind === 'reconciliation'
+                    ? 'text-slate-300 dark:text-slate-900'
+                    : reconciliationOverview.allKlop
+                      ? 'text-emerald-600 dark:text-emerald-400 font-semibold'
+                      : 'text-amber-600 dark:text-amber-400 font-semibold'
+                }`}
+              >
+                {reconciliationOverview.allKlop
+                  ? '100%'
+                  : `${reconciliationOverview.klopCount}/${reconciliationOverview.totalChecks}`}
+              </span>
+            )}
+          </button>
         </div>
 
         {/* Administrator & Security Navigation */}
@@ -645,6 +721,22 @@ export default function DashboardShell({
                         <Download className="w-4 h-4 text-[#8B7335] dark:text-[#C5AE6B]" />
                         <span>{copy.header.downloadAllPdf}</span>
                       </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          setPdfMenuOpen(false);
+                          await exportReconciliationToPdf({
+                            snapshot,
+                            adjustments,
+                            lang,
+                            timezone,
+                          });
+                        }}
+                        className="w-full px-4 py-2.5 text-left text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2"
+                      >
+                        <Scale className="w-4 h-4 text-[#8B7335] dark:text-[#C5AE6B]" />
+                        <span>{copy.reconciliation.downloadPdfBtn}</span>
+                      </button>
                     </div>
                   </>
                 )}
@@ -729,6 +821,16 @@ export default function DashboardShell({
                 <span>{copy.dashboard.retrySync}</span>
               </button>
             </div>
+          ) : activeView.kind === 'reconciliation' && snapshot ? (
+            <ReconciliationPanel
+              snapshot={snapshot}
+              adjustments={adjustments}
+              currentUser={user}
+              lang={lang}
+              timezone={timezone}
+              onAdjustmentsChange={setAdjustments}
+              onSelectTabGid={selectSheetTab}
+            />
           ) : activeTab ? (
             <div className="space-y-6">
               {/* Mobile/Tablet Quick Category Switcher Strip */}
@@ -751,6 +853,51 @@ export default function DashboardShell({
                       </button>
                     );
                   })}
+                  <button
+                    type="button"
+                    onClick={selectReconciliation}
+                    className="px-3 py-2 min-h-[40px] rounded-lg text-xs font-medium whitespace-nowrap shrink-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 flex items-center gap-1.5"
+                  >
+                    <Scale className="w-3.5 h-3.5 text-[#8B7335] dark:text-[#C5AE6B]" />
+                    <span>{copy.nav.reconciliation}</span>
+                  </button>
+                </div>
+              )}
+
+              {/* Live 100% Klop / Reconciliation Status Strip */}
+              {snapshot && (
+                <div
+                  className={`rounded-xl border px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                    reconciliationOverview.allKlop
+                      ? 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900/60'
+                      : 'bg-amber-50/70 dark:bg-amber-950/30 border-amber-200 dark:border-amber-900/60'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5 text-xs sm:text-sm">
+                    {reconciliationOverview.allKlop ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                    ) : (
+                      <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                    )}
+                    <span className="font-semibold text-slate-900 dark:text-slate-100">
+                      {reconciliationOverview.allKlop
+                        ? copy.reconciliation.status100Klop
+                        : `${reconciliationOverview.klopCount}/${reconciliationOverview.totalChecks} ${copy.reconciliation.checksPassedLabel}`}
+                    </span>
+                    <span className="text-slate-600 dark:text-slate-300">
+                      {reconciliationOverview.allKlop
+                        ? `— ${copy.reconciliation.bannerAllMatched}`
+                        : `— ${copy.reconciliation.netVarianceLabel}: ${formatRupiah(reconciliationOverview.netVariance)}`}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={selectReconciliation}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[34px] text-xs font-semibold rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap shrink-0 self-start sm:self-auto"
+                  >
+                    <Scale className="w-3.5 h-3.5 text-[#8B7335] dark:text-[#C5AE6B]" />
+                    <span>{copy.reconciliation.openReconciliationBtn}</span>
+                  </button>
                 </div>
               )}
 

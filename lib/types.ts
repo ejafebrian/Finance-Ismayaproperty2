@@ -83,6 +83,39 @@ export interface ParsedSheetTab {
   overview?: RekapOverviewMetrics;
 }
 
+export interface ReconciliationCheckItem {
+  id: string;
+  scope: 'summary_balance' | 'cross_tab' | 'tab_internal' | 'legal_section';
+  label: string;
+  sourceLabel: string;
+  targetLabel: string;
+  expectedAmount: number;
+  actualAmount: number;
+  rawDifference: number;
+  rawMatchPercent: number;
+  note?: string;
+  suggestedReason?: string;
+  linkedGid?: string;
+}
+
+export interface ReconciliationAdjustment {
+  id: string;
+  checkId: string;
+  mode: 'percent' | 'nominal';
+  percentValue: number;
+  nominalDelta: number;
+  reason: string;
+  updatedAt: string;
+  updatedBy: string;
+}
+
+export interface ReconciliationSummary {
+  checks: ReconciliationCheckItem[];
+  rawMatchedCount: number;
+  totalChecks: number;
+  rawOverallPercent: number;
+}
+
 export interface SpreadsheetSnapshot {
   spreadsheetId: string;
   spreadsheetUrl: string;
@@ -90,6 +123,7 @@ export interface SpreadsheetSnapshot {
   fetchedAt: string;
   signature: string;
   tabs: ParsedSheetTab[];
+  reconciliation: ReconciliationSummary;
 }
 
 export interface PublicUser {
@@ -108,7 +142,8 @@ export type ActivityCategory =
   | 'credentials'
   | 'user_management'
   | 'spreadsheet_sync'
-  | 'export';
+  | 'export'
+  | 'reconciliation';
 
 export interface ActivityLogEntry {
   id: string;

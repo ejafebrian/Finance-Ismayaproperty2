@@ -4,6 +4,8 @@ import type {
   LegalCostItem,
   ParsedSheetTab,
   PaymentRow,
+  ReconciliationCheckItem,
+  ReconciliationSummary,
   RekapOverviewMetrics,
   RekapSummaryItem,
   SheetTabMeta,
@@ -516,6 +518,164 @@ function parseDetailTab(meta: SheetTabMeta, matrix: string[][]): ParsedSheetTab 
   };
 }
 
+function computeMatchPercent(expectedAmount: number, actualAmount: number): number {
+  if (expectedAmount === actualAmount) return 100;
+  const denom = Math.max(Math.abs(expectedAmount), Math.abs(actualAmount), 1);
+  const raw = (1 - Math.abs(actualAmount - expectedAmount) / denom) * 100;
+  const rounded = Math.max(0, Math.min(100, Math.round(raw * 100) / 100));
+  return rounded >= 100 ? 99.99 : rounded;
+}
+
+function buildReconciliationSummary(parsedTabs: ParsedSheetTab[]): ReconciliationSummary {
+  const checks: ReconciliationCheckItem[] = [];
+  const rekap = parsedTabs.find((t) => t.meta.isSummary);
+
+  if (rekap && rekap.overview) {
+    const summarySum = (rekap.summaryItems || []).reduce((acc, s) => acc + s.amount, 0);
+    checks.push({
+      id: 'summary_paid_vs_items',
+      scope: 'summary_balance',
+      label: 'Total Dana Masuk vs Penjumlahan Pos Rekapitulasi',
+      sourceLabel: 'Footer Rekapitulasi (Dana Masuk)',
+      targetLabel: `Jumlah ${rekap.summaryItems?.length || 0} Pos Rekapitulasi`,
+      expectedAmount: rekap.overview.totalPaid,
+      actualAmount: summarySum,
+      rawDifference: summarySum - rekap.overview.totalPaid,
+      rawMatchPercent: computeMatchPercent(rekap.overview.totalPaid, summarySum),
+      linkedGid: rekap.meta.gid,
+    });
+
+    const computedRemaining = Math.max(0, rekap.overview.totalObligation - rekap.overview.totalPaid);
+    checks.push({
+      id: 'summary_remaining_balance',
+      scope: 'summary_balance',
+      label: 'Sisa Pembayaran (Harga Tanah - Dana Masuk) vs Footer',
+      sourceLabel: 'Footer Rekapitulasi (Sisa Pembayaran)',
+      targetLabel: 'Kewajiban Rp 4,7M − Total Dana Masuk',
+      expectedAmount: rekap.overview.remainingBalance,
+      actualAmount: computedRemaining,
+      rawDifference: computedRemaining - rekap.overview.remainingBalance,
+      rawMatchPercent: computeMatchPercent(rekap.overview.remainingBalance, computedRemaining),
+      linkedGid: rekap.meta.gid,
+    });
+
+    // Cross-tab checks: Rekapitulasi summary line vs owner tab
+    for (const item of rekap.summaryItems || []) {
+      if (!item.linkedTabName) continue;
+      const matchedTab = parsedTabs.find((t) => t.meta.name === item.linkedTabName);
+      if (!matchedTab) continue;
+      const tabTotal = matchedTab.declaredTotal ?? matchedTab.computedTotal;
+      checks.push({
+        id: `cross_${matchedTab.meta.gid}`,
+        scope: 'cross_tab',
+        label: `Sinkronisasi Rekapitulasi ↔ Tab ${matchedTab.meta.name}`,
+        sourceLabel: `Rekapitulasi (${item.label})`,
+        targetLabel: `Tab ${matchedTab.meta.name}`,
+        expectedAmount: item.amount,
+        actualAmount: tabTotal,
+        rawDifference: tabTotal - item.amount,
+        rawMatchPercent: computeMatchPercent(item.amount, tabTotal),
+        linkedGid: matchedTab.meta.gid,
+      });
+    }
+
+    // Rekapitulasi main chronological rows vs official summary total paid
+    const commissionNotes = rekap.rows
+      .filter((r) => /komisi|dihilangkan/i.test(`${r.description} ${r.note}`))
+      .map((r) => `${r.dateRaw}: ${r.amountFormatted} (${r.note || r.description})`);
+    const mainDiff = rekap.computedTotal - rekap.overview.totalPaid;
+    checks.push({
+      id: 'rekap_chronological_vs_official',
+      scope: 'tab_internal',
+      label: 'Rekapitulasi: Jumlah Baris Kronologis vs Total Dana Masuk Resmi',
+      sourceLabel: 'Total Dana Masuk Resmi (Rekapitulasi)',
+      targetLabel: `Penjumlahan ${rekap.rows.length} Baris Kronologis`,
+      expectedAmount: rekap.overview.totalPaid,
+      actualAmount: rekap.computedTotal,
+      rawDifference: mainDiff,
+      rawMatchPercent: computeMatchPercent(rekap.overview.totalPaid, rekap.computedTotal),
+      note:
+        mainDiff !== 0 && commissionNotes.length > 0
+          ? `Catatan pada sheet: ${commissionNotes.join('; ')}`
+          : undefined,
+      suggestedReason:
+        mainDiff !== 0
+          ? commissionNotes.length > 0
+            ? `Penyesuaian catatan komisi/selisih kronologis (${commissionNotes[0]}) agar klop dengan Total Dana Masuk resmi.`
+            : 'Penyesuaian selisih penjumlahan baris kronologis terhadap Rekapitulasi resmi.'
+          : undefined,
+      linkedGid: rekap.meta.gid,
+    });
+
+    // Legal costs section declared total vs sum of legal rows
+    if (rekap.legalCosts) {
+      const legalRowsSum = rekap.legalCosts.rows.reduce((acc, r) => acc + r.amount, 0);
+      const legalDiff = legalRowsSum - rekap.legalCosts.total;
+      const kotaPrajaRow = rekap.legalCosts.rows.find((r) =>
+        /kota\s*praja|pak\s*teguh/i.test(`${r.description} ${r.note}`)
+      );
+      checks.push({
+        id: 'rekap_legal_section',
+        scope: 'legal_section',
+        label: 'Dokumen Legalitas: Total Deklarasi vs Jumlah Baris Legalitas',
+        sourceLabel: 'Total Dokumen Legalitas (Rekapitulasi)',
+        targetLabel: `Penjumlahan ${rekap.legalCosts.rows.length} Baris Legalitas`,
+        expectedAmount: rekap.legalCosts.total,
+        actualAmount: legalRowsSum,
+        rawDifference: legalDiff,
+        rawMatchPercent: computeMatchPercent(rekap.legalCosts.total, legalRowsSum),
+        note:
+          legalDiff !== 0 && kotaPrajaRow
+            ? `Baris informasi "${kotaPrajaRow.description}" (${kotaPrajaRow.amountFormatted} · ${kotaPrajaRow.note}) tidak dimasukkan ke total biaya legalitas.`
+            : undefined,
+        suggestedReason:
+          legalDiff !== 0 && kotaPrajaRow
+            ? `Eksklusi pos informasi ${kotaPrajaRow.description} (${kotaPrajaRow.amountFormatted}) yang sudah tercatat di pengambilan Pak Teguh.`
+            : undefined,
+        linkedGid: rekap.meta.gid,
+      });
+    }
+  }
+
+  // Per-tab internal math audit for all detail tabs
+  for (const tab of parsedTabs) {
+    if (tab.meta.isSummary) continue;
+    const declared = tab.declaredTotal ?? tab.computedTotal;
+    const isKerohiman = tab.meta.name.toLowerCase().includes('kerohiman');
+    checks.push({
+      id: `tab_internal_${tab.meta.gid}`,
+      scope: 'tab_internal',
+      label: `Audit Internal Tab ${tab.meta.name} (Total Deklarasi vs ${tab.transactionCount} Baris)`,
+      sourceLabel: `Sel TOTAL Tab ${tab.meta.name}`,
+      targetLabel: `Penjumlahan ${tab.transactionCount} Baris Transaksi`,
+      expectedAmount: declared,
+      actualAmount: tab.computedTotal,
+      rawDifference: tab.computedTotal - declared,
+      rawMatchPercent: computeMatchPercent(declared, tab.computedTotal),
+      note: isKerohiman
+        ? 'Tab terpisah (Kerohiman Bu Erna — di luar komponen pokok harga tanah Rp 4,7M).'
+        : undefined,
+      linkedGid: tab.meta.gid,
+    });
+  }
+
+  const rawMatchedCount = checks.filter((c) => c.rawDifference === 0).length;
+  const rawOverallPercent =
+    checks.length > 0
+      ? Math.round(
+          (checks.reduce((sum, c) => sum + c.rawMatchPercent, 0) / checks.length) * 100
+        ) / 100
+      : 100;
+
+  return {
+    checks,
+    rawMatchedCount,
+    totalChecks: checks.length,
+    rawOverallPercent:
+      rawMatchedCount === checks.length ? 100 : Math.min(99.99, rawOverallPercent),
+  };
+}
+
 export async function fetchLiveSpreadsheet(
   spreadsheetId: string = DEFAULT_SPREADSHEET_ID
 ): Promise<SpreadsheetSnapshot> {
@@ -566,6 +726,8 @@ export async function fetchLiveSpreadsheet(
     });
   }
 
+  const reconciliation = buildReconciliationSummary(parsedTabs);
+
   const sigPayload = parsedTabs.map((t) => ({
     gid: t.meta.gid,
     name: t.meta.name,
@@ -586,5 +748,6 @@ export async function fetchLiveSpreadsheet(
     fetchedAt: new Date().toISOString(),
     signature,
     tabs: parsedTabs,
+    reconciliation,
   };
 }

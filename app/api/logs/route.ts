@@ -27,6 +27,7 @@ export async function POST(req: NextRequest) {
       'user_management',
       'spreadsheet_sync',
       'export',
+      'reconciliation',
     ];
     const category: ActivityCategory = validCategories.includes(body.category)
       ? body.category

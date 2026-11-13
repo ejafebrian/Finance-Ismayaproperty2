@@ -2,7 +2,13 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { ActivityCategory, ActivityLogEntry, PublicUser, UserRole } from './types';
+import type {
+  ActivityCategory,
+  ActivityLogEntry,
+  PublicUser,
+  ReconciliationAdjustment,
+  UserRole,
+} from './types';
 
 interface StoredUser {
   id: string;
@@ -28,6 +34,7 @@ interface StoreState {
     tabCount: number;
     rowCounts: Record<string, number>;
   } | null;
+  reconciliationAdjustments?: ReconciliationAdjustment[];
 }
 
 export const SESSION_COOKIE_NAME = 'ismaya_session';
@@ -833,3 +840,97 @@ export function recordSpreadsheetSyncIfChanged(params: {
 
   return { changed };
 }
+
+export function getReconciliationAdjustments(): ReconciliationAdjustment[] {
+  const store = readStore();
+  return Array.isArray(store.reconciliationAdjustments)
+    ? store.reconciliationAdjustments
+    : [];
+}
+
+export function upsertReconciliationAdjustment(
+  actor: PublicUser,
+  params: {
+    checkId: string;
+    checkLabel: string;
+    mode: 'percent' | 'nominal';
+    percentValue: number;
+    nominalDelta: number;
+    reason: string;
+  }
+): ReconciliationAdjustment[] {
+  const store = readStore();
+  if (!Array.isArray(store.logs)) store.logs = [];
+  const current = Array.isArray(store.reconciliationAdjustments)
+    ? [...store.reconciliationAdjustments]
+    : [];
+
+  const now = new Date().toISOString();
+  const existingIdx = current.findIndex((a) => a.checkId === params.checkId);
+  const entry: ReconciliationAdjustment = {
+    id: existingIdx >= 0 ? current[existingIdx].id : `adj_${crypto.randomBytes(6).toString('hex')}`,
+    checkId: params.checkId,
+    mode: params.mode,
+    percentValue: params.percentValue,
+    nominalDelta: params.nominalDelta,
+    reason: params.reason.trim() || 'Penyesuaian rekonsiliasi saldo',
+    updatedAt: now,
+    updatedBy: actor.username,
+  };
+
+  if (existingIdx >= 0) {
+    current[existingIdx] = entry;
+  } else {
+    current.push(entry);
+  }
+
+  store.reconciliationAdjustments = current;
+  store.logs.unshift({
+    id: `log_${crypto.randomBytes(6).toString('hex')}`,
+    timestamp: now,
+    actorUsername: actor.username,
+    actorDisplayName: actor.displayName,
+    actorRole: actor.role,
+    category: 'reconciliation',
+    action: 'RECONCILIATION_ADJUSTMENT_SAVED',
+    description: `${actor.displayName} menerapkan penyesuaian rekonsiliasi untuk "${params.checkLabel}".`,
+    details: `${params.mode === 'percent' ? `${params.percentValue.toFixed(4)}%` : 'Nominal'} (${params.nominalDelta >= 0 ? '+' : ''}Rp ${new Intl.NumberFormat('id-ID').format(Math.round(params.nominalDelta))}) · ${entry.reason}`,
+  });
+  store.logs = store.logs.slice(0, 500);
+  writeStore(store);
+
+  return current;
+}
+
+export function deleteReconciliationAdjustment(
+  actor: PublicUser,
+  checkId: string
+): ReconciliationAdjustment[] {
+  const store = readStore();
+  if (!Array.isArray(store.logs)) store.logs = [];
+  const current = Array.isArray(store.reconciliationAdjustments)
+    ? store.reconciliationAdjustments
+    : [];
+  const target = current.find((a) => a.checkId === checkId);
+  const next = current.filter((a) => a.checkId !== checkId);
+  store.reconciliationAdjustments = next;
+
+  if (target) {
+    store.logs.unshift({
+      id: `log_${crypto.randomBytes(6).toString('hex')}`,
+      timestamp: new Date().toISOString(),
+      actorUsername: actor.username,
+      actorDisplayName: actor.displayName,
+      actorRole: actor.role,
+      category: 'reconciliation',
+      action: 'RECONCILIATION_ADJUSTMENT_RESET',
+      description: `${actor.displayName} mereset penyesuaian rekonsiliasi (${checkId}).`,
+      details: target.reason,
+    });
+    store.logs = store.logs.slice(0, 500);
+    writeStore(store);
+  }
+
+  return next;
+}
+

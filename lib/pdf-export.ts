@@ -5,6 +5,7 @@ import type {
   ActivityLogEntry,
   Language,
   ParsedSheetTab,
+  ReconciliationAdjustment,
   SpreadsheetSnapshot,
 } from './types';
 
@@ -692,3 +693,116 @@ export async function exportActivityLogToPdf(params: {
   addFootersToAllPages(doc, lang);
   doc.save(`ISMAYA-PROPERTY-ACTIVITY-LOG-${new Date().toISOString().slice(0, 10)}.pdf`);
 }
+
+export async function exportReconciliationToPdf(params: {
+  snapshot: SpreadsheetSnapshot;
+  adjustments: ReconciliationAdjustment[];
+  lang: Language;
+  timezone: string;
+}) {
+  const { snapshot, adjustments, lang, timezone } = params;
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const logo = await loadLogoDataUrl();
+
+  const generatedStr = `${lang === 'id' ? 'Dicetak' : 'Generated'}: ${formatLocalTimestamp(
+    new Date().toISOString(),
+    lang,
+    timezone
+  )} (${timezone})`;
+
+  const startY = drawReportHeader(
+    doc,
+    logo,
+    lang === 'id'
+      ? 'Laporan Rekonsiliasi Data & Penyesuaian Persentase'
+      : 'Data Reconciliation & Percentage Adjustment Report',
+    lang === 'id'
+      ? 'Audit Keseimbangan Lintas Tab · Pembayaran Tanah Utan Kayu'
+      : 'Cross-Tab Balance Audit · Utan Kayu Land Payments',
+    generatedStr
+  );
+
+  const adjMap = new Map(adjustments.map((a) => [a.checkId, a]));
+  let matchedCount = 0;
+  let netAbsDiff = 0;
+
+  const rows = snapshot.reconciliation.checks.map((c, idx) => {
+    const adj = adjMap.get(c.id);
+    const adjustedActual = c.actualAmount + (adj ? adj.nominalDelta : 0);
+    const diff = Math.round(adjustedActual - c.expectedAmount);
+    const isKlop = diff === 0;
+    if (isKlop) matchedCount++;
+    netAbsDiff += Math.abs(diff);
+
+    const denom = Math.max(Math.abs(c.expectedAmount), Math.abs(adjustedActual), 1);
+    const pctRaw = isKlop
+      ? 100
+      : Math.max(0, Math.min(99.99, Math.round((1 - Math.abs(diff) / denom) * 10000) / 100));
+    const statusText = isKlop
+      ? adj
+        ? lang === 'id'
+          ? '100% Klop (Disesuaikan)'
+          : '100% Matched (Adjusted)'
+        : lang === 'id'
+          ? '100% Klop'
+          : '100% Matched'
+      : `${pctRaw.toFixed(2)}% (${lang === 'id' ? 'Selisih' : 'Variance'})`;
+
+    return [
+      String(idx + 1),
+      c.label,
+      formatRupiah(c.expectedAmount),
+      formatRupiah(adjustedActual),
+      diff === 0 ? 'Rp 0' : `${diff > 0 ? '+' : '-'}${formatRupiah(Math.abs(diff))}`,
+      adj ? `${adj.percentValue >= 0 ? '+' : ''}${adj.percentValue.toFixed(2)}%` : '0%',
+      statusText,
+      adj?.reason || c.note || '-',
+    ];
+  });
+
+  const allKlop = matchedCount === snapshot.reconciliation.checks.length;
+  const summaryLine =
+    lang === 'id'
+      ? `Status Keseluruhan: ${allKlop ? '100% KLOP' : `${matchedCount}/${snapshot.reconciliation.totalChecks} Pos Klop`} · Total Selisih Tersisa: ${formatRupiah(netAbsDiff)} · Penyesuaian Aktif: ${adjustments.length}`
+      : `Overall Status: ${allKlop ? '100% MATCHED' : `${matchedCount}/${snapshot.reconciliation.totalChecks} Matched`} · Remaining Variance: ${formatRupiah(netAbsDiff)} · Active Adjustments: ${adjustments.length}`;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.setTextColor(allKlop ? 5 : 180, allKlop ? 150 : 83, allKlop ? 105 : 9);
+  doc.text(summaryLine, 14, startY + 2);
+
+  autoTable(doc, {
+    startY: startY + 7,
+    head: [
+      [
+        'No',
+        lang === 'id' ? 'Pemeriksaan Rekonsiliasi' : 'Reconciliation Check',
+        lang === 'id' ? 'Nilai Resmi' : 'Declared',
+        lang === 'id' ? 'Nilai Hitung / Sesuai' : 'Computed / Adjusted',
+        lang === 'id' ? 'Selisih' : 'Variance',
+        lang === 'id' ? 'Penyesuaian %' : 'Adj %',
+        'Status',
+        lang === 'id' ? 'Catatan' : 'Notes',
+      ],
+    ],
+    body: rows,
+    theme: 'striped',
+    styles: { fontSize: 7.8, cellPadding: 2.3 },
+    headStyles: { fillColor: [17, 24, 39], textColor: [255, 255, 255] },
+    columnStyles: {
+      0: { cellWidth: 9, halign: 'center' },
+      1: { cellWidth: 64 },
+      2: { cellWidth: 32, halign: 'right' },
+      3: { cellWidth: 32, halign: 'right' },
+      4: { cellWidth: 28, halign: 'right' },
+      5: { cellWidth: 20, halign: 'right' },
+      6: { cellWidth: 34 },
+      7: { cellWidth: 50 },
+    },
+    margin: { left: 14, right: 14, bottom: 20 },
+  });
+
+  addFootersToAllPages(doc, lang);
+  doc.save(`ISMAYA-PROPERTY-REKONSILIASI-${new Date().toISOString().slice(0, 10)}.pdf`);
+}
+
