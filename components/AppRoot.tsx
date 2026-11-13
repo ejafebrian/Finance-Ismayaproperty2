@@ -96,14 +96,14 @@ export default function AppRoot({ initialUser }: AppRootProps) {
     });
   };
 
-  const handleLogout = async () => {
+  const handleLogout = React.useCallback(async () => {
     try {
       await authFetch('/api/auth/logout', { method: 'POST' });
     } finally {
       setClientSessionToken(null);
       setUser(null);
     }
-  };
+  }, []);
 
   return (
     <AnimatePresence mode="wait">

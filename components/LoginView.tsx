@@ -74,7 +74,7 @@ export default function LoginView({
         body: JSON.stringify({ username: username.trim(), password }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(res.status === 401 ? copy.login.errorInvalid : data.error || copy.login.errorGeneric);
         return;
@@ -85,6 +85,8 @@ export default function LoginView({
       }
       if (data.user) {
         onLoginSuccess(data.user);
+      } else {
+        setError(copy.login.errorGeneric);
       }
     } catch {
       setError(copy.login.errorGeneric);

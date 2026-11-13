@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import type { ActivityCategory, ActivityLogEntry, PublicUser, UserRole } from './types';
 
@@ -31,18 +32,54 @@ interface StoreState {
 
 export const SESSION_COOKIE_NAME = 'ismaya_session';
 
-const DATA_DIR = path.join(process.cwd(), '.data');
-const STORE_PATH = path.join(DATA_DIR, 'ismaya-store.json');
+const FALLBACK_SESSION_SECRET =
+  'ismaya-property-utan-kayu-ledger-session-secret-v1-2026';
+
+const globalForStore = globalThis as unknown as {
+  __ismayaStoreState?: StoreState;
+  __ismayaStoreDir?: string;
+};
 
 function getSessionSecret(): string {
-  if (process.env.SESSION_SECRET && process.env.SESSION_SECRET !== 'change-me-to-a-random-secret-string') {
-    return process.env.SESSION_SECRET;
+  const envSecret = (process.env.SESSION_SECRET || '').trim();
+  if (envSecret && envSecret !== 'change-me-to-a-random-secret-string') {
+    return envSecret;
   }
-  // Stable per-installation secret derived from app path + fallback seed
   return crypto
     .createHash('sha256')
-    .update(`ismaya-property-utar-kayu-${process.cwd()}`)
+    .update(FALLBACK_SESSION_SECRET)
     .digest('hex');
+}
+
+function isDirectoryWritable(dirPath: string): boolean {
+  try {
+    if (!fs.existsSync(dirPath)) {
+      fs.mkdirSync(dirPath, { recursive: true });
+    }
+    const probeFile = path.join(dirPath, `.write-test-${process.pid}`);
+    fs.writeFileSync(probeFile, 'ok', 'utf8');
+    fs.unlinkSync(probeFile);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getWritableDataDir(): string | null {
+  if (globalForStore.__ismayaStoreDir) {
+    return globalForStore.__ismayaStoreDir;
+  }
+  const projectDataDir = path.join(process.cwd(), '.data');
+  if (isDirectoryWritable(projectDataDir)) {
+    globalForStore.__ismayaStoreDir = projectDataDir;
+    return projectDataDir;
+  }
+  const tmpDataDir = path.join(os.tmpdir(), 'ismaya-property-data');
+  if (isDirectoryWritable(tmpDataDir)) {
+    globalForStore.__ismayaStoreDir = tmpDataDir;
+    return tmpDataDir;
+  }
+  return null;
 }
 
 function hashPassword(password: string, salt?: string): { salt: string; hash: string } {
@@ -52,11 +89,15 @@ function hashPassword(password: string, salt?: string): { salt: string; hash: st
 }
 
 function verifyPassword(password: string, salt: string, storedHash: string): boolean {
-  const { hash } = hashPassword(password, salt);
-  const a = Buffer.from(hash, 'hex');
-  const b = Buffer.from(storedHash, 'hex');
-  if (a.length !== b.length) return false;
-  return crypto.timingSafeEqual(a, b);
+  try {
+    const { hash } = hashPassword(password, salt);
+    const a = Buffer.from(hash, 'hex');
+    const b = Buffer.from(storedHash, 'hex');
+    if (a.length !== b.length) return false;
+    return crypto.timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
 }
 
 function createInitialStore(): StoreState {
@@ -116,36 +157,103 @@ function createInitialStore(): StoreState {
   };
 }
 
-function readStore(): StoreState {
+function tryReadStoreFile(filePath: string): StoreState | null {
   try {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-    }
-    if (!fs.existsSync(STORE_PATH)) {
-      const initial = createInitialStore();
-      fs.writeFileSync(STORE_PATH, JSON.stringify(initial, null, 2), 'utf8');
-      return initial;
-    }
-    const raw = fs.readFileSync(STORE_PATH, 'utf8');
-    const parsed = JSON.parse(raw) as StoreState;
+    if (!fs.existsSync(filePath)) return null;
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const parsed = JSON.parse(raw) as Partial<StoreState>;
     if (!Array.isArray(parsed.users) || parsed.users.length === 0) {
-      const initial = createInitialStore();
-      fs.writeFileSync(STORE_PATH, JSON.stringify(initial, null, 2), 'utf8');
-      return initial;
+      return null;
     }
-    return parsed;
+    return {
+      users: parsed.users.filter(
+        (u): u is StoredUser =>
+          Boolean(u && typeof u.id === 'string' && typeof u.username === 'string')
+      ),
+      logs: Array.isArray(parsed.logs) ? parsed.logs : [],
+      lastSheetSignature:
+        typeof parsed.lastSheetSignature === 'string' ? parsed.lastSheetSignature : null,
+      lastSheetSummary: parsed.lastSheetSummary || null,
+    };
   } catch {
-    return createInitialStore();
+    return null;
   }
 }
 
-function writeStore(state: StoreState): void {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+function readStore(): StoreState {
+  if (
+    globalForStore.__ismayaStoreState &&
+    Array.isArray(globalForStore.__ismayaStoreState.users) &&
+    globalForStore.__ismayaStoreState.users.length > 0
+  ) {
+    if (!Array.isArray(globalForStore.__ismayaStoreState.logs)) {
+      globalForStore.__ismayaStoreState.logs = [];
+    }
+    return globalForStore.__ismayaStoreState;
   }
-  const tmpPath = `${STORE_PATH}.tmp`;
-  fs.writeFileSync(tmpPath, JSON.stringify(state, null, 2), 'utf8');
-  fs.renameSync(tmpPath, STORE_PATH);
+
+  const writableDir = getWritableDataDir();
+  const writablePath = writableDir ? path.join(writableDir, 'ismaya-store.json') : null;
+  const projectPath = path.join(process.cwd(), '.data', 'ismaya-store.json');
+
+  let loaded: StoreState | null = null;
+  if (writablePath) {
+    loaded = tryReadStoreFile(writablePath);
+  }
+  if (!loaded && projectPath !== writablePath) {
+    loaded = tryReadStoreFile(projectPath);
+  }
+  if (!loaded || loaded.users.length === 0) {
+    loaded = createInitialStore();
+  }
+
+  // Ensure env-configured admin is also available if added later via runtime Secrets
+  const envUser = (process.env.ADMIN_INITIAL_USERNAME || '').trim();
+  const envPass = process.env.ADMIN_INITIAL_PASSWORD || '';
+  if (
+    envUser &&
+    envPass &&
+    !loaded.users.some((u) => u.id === 'usr_admin_env') &&
+    !loaded.users.some((u) => u.username.toLowerCase() === envUser.toLowerCase())
+  ) {
+    const now = new Date().toISOString();
+    const envHashed = hashPassword(envPass);
+    loaded.users.push({
+      id: 'usr_admin_env',
+      username: envUser,
+      displayName: 'Administrator',
+      role: 'admin',
+      active: true,
+      passwordSalt: envHashed.salt,
+      passwordHash: envHashed.hash,
+      tokenVersion: 1,
+      createdAt: now,
+      updatedAt: now,
+      lastLoginAt: null,
+    });
+  }
+
+  globalForStore.__ismayaStoreState = loaded;
+  if (writablePath && !fs.existsSync(writablePath)) {
+    writeStore(loaded);
+  }
+  return loaded;
+}
+
+function writeStore(state: StoreState): void {
+  globalForStore.__ismayaStoreState = state;
+  const writableDir = getWritableDataDir();
+  if (!writableDir) return;
+
+  try {
+    const storePath = path.join(writableDir, 'ismaya-store.json');
+    const tmpPath = `${storePath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(state, null, 2), 'utf8');
+    fs.renameSync(tmpPath, storePath);
+  } catch (err) {
+    // Non-fatal: keep in-memory state working even on read-only containers
+    console.warn('[ismaya-store] Unable to persist store to disk:', err);
+  }
 }
 
 export function toPublicUser(user: StoredUser): PublicUser {
@@ -163,6 +271,9 @@ export function toPublicUser(user: StoredUser): PublicUser {
 
 export interface SessionPayload {
   uid: string;
+  username?: string;
+  displayName?: string;
+  role?: UserRole;
   tv: number;
   exp: number;
 }
@@ -170,6 +281,9 @@ export interface SessionPayload {
 export function signSessionToken(user: StoredUser): string {
   const payload: SessionPayload = {
     uid: user.id,
+    username: user.username,
+    displayName: user.displayName,
+    role: user.role,
     tv: user.tokenVersion,
     exp: Date.now() + 1000 * 60 * 60 * 24 * 7, // 7 days
   };
@@ -185,6 +299,8 @@ export function verifySessionToken(token: string | undefined | null): PublicUser
   if (!token || !token.includes('.')) return null;
   try {
     const [encoded, sig] = token.split('.');
+    if (!encoded || !sig) return null;
+
     const expectedSig = crypto
       .createHmac('sha256', getSessionSecret())
       .update(encoded)
@@ -194,12 +310,49 @@ export function verifySessionToken(token: string | undefined | null): PublicUser
     if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
 
     const payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as SessionPayload;
-    if (!payload.uid || Date.now() > payload.exp) return null;
+    if (!payload.uid || typeof payload.exp !== 'number' || Date.now() > payload.exp) {
+      return null;
+    }
 
     const store = readStore();
-    const user = store.users.find((u) => u.id === payload.uid && u.active);
-    if (!user || user.tokenVersion !== payload.tv) return null;
-    return toPublicUser(user);
+    const user = store.users.find((u) => u.id === payload.uid);
+
+    if (user) {
+      if (!user.active) return null;
+      // Reject older tokens after password reset or deactivation
+      if (payload.tv < user.tokenVersion) return null;
+      if (payload.tv === user.tokenVersion) {
+        return toPublicUser(user);
+      }
+      // payload.tv > user.tokenVersion can happen when credentials were updated on another instance
+      return {
+        id: user.id,
+        username: payload.username || user.username,
+        displayName: payload.displayName || user.displayName,
+        role: payload.role || user.role,
+        active: true,
+        createdAt: user.createdAt,
+        updatedAt: new Date().toISOString(),
+        lastLoginAt: user.lastLoginAt,
+      };
+    }
+
+    // Stateless fallback when token was issued by another instance
+    if (payload.username && (payload.role === 'admin' || payload.role === 'staff')) {
+      const now = new Date().toISOString();
+      return {
+        id: payload.uid,
+        username: payload.username,
+        displayName: payload.displayName || payload.username,
+        role: payload.role,
+        active: true,
+        createdAt: now,
+        updatedAt: now,
+        lastLoginAt: now,
+      };
+    }
+
+    return null;
   } catch {
     return null;
   }
@@ -209,24 +362,39 @@ export function extractTokenFromRequest(req: {
   cookies: { get: (name: string) => { value: string } | undefined };
   headers: { get: (name: string) => string | null };
 }): string | null {
-  const cookieToken = req.cookies.get(SESSION_COOKIE_NAME)?.value;
-  if (cookieToken) return cookieToken;
   const authHeader = req.headers.get('authorization');
   if (authHeader && /^Bearer\s+/i.test(authHeader)) {
-    return authHeader.replace(/^Bearer\s+/i, '').trim();
+    const bearer = authHeader.replace(/^Bearer\s+/i, '').trim();
+    if (bearer) return bearer;
   }
+  const cookieToken = req.cookies.get(SESSION_COOKIE_NAME)?.value;
+  if (cookieToken) return cookieToken;
   return null;
 }
 
-export function getCookieOptions(req: {
-  headers: { get: (name: string) => string | null };
-  url?: string;
-}, maxAge: number) {
-  const proto = req.headers.get('x-forwarded-proto') || '';
+export function getCookieOptions(
+  req: {
+    headers: { get: (name: string) => string | null };
+    url?: string;
+  },
+  maxAge: number
+) {
+  const proto = (req.headers.get('x-forwarded-proto') || '').toLowerCase();
+  const origin = (req.headers.get('origin') || '').toLowerCase();
+  const referer = (req.headers.get('referer') || '').toLowerCase();
+  const host = (req.headers.get('host') || '').toLowerCase();
+
+  const isLocalHost =
+    host.startsWith('localhost') ||
+    host.startsWith('127.0.0.1') ||
+    host.startsWith('[::1]');
+
   const isHttps =
     proto.includes('https') ||
+    origin.startsWith('https://') ||
+    referer.startsWith('https://') ||
     (req.url ? req.url.startsWith('https://') : false) ||
-    process.env.NODE_ENV === 'production';
+    (process.env.NODE_ENV === 'production' && !isLocalHost);
 
   return {
     httpOnly: true,
@@ -242,8 +410,13 @@ export function authenticateUser(
   password: string
 ): { user: StoredUser; publicUser: PublicUser } | null {
   const store = readStore();
+  if (!Array.isArray(store.logs)) {
+    store.logs = [];
+  }
   const normalized = username.trim().toLowerCase();
-  const idx = store.users.findIndex((u) => u.username.toLowerCase() === normalized);
+  const idx = store.users.findIndex(
+    (u) => typeof u?.username === 'string' && u.username.toLowerCase() === normalized
+  );
   if (idx === -1) return null;
 
   const user = store.users[idx];

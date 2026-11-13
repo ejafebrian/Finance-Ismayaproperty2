@@ -8,7 +8,16 @@ import {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
+    let body: { username?: unknown; password?: unknown };
+    try {
+      body = (await req.json()) as { username?: unknown; password?: unknown };
+    } catch {
+      return NextResponse.json(
+        { error: 'Invalid request body.' },
+        { status: 400 }
+      );
+    }
+
     const username = typeof body.username === 'string' ? body.username.trim() : '';
     const password = typeof body.password === 'string' ? body.password : '';
 
@@ -29,13 +38,18 @@ export async function POST(req: NextRequest) {
 
     const token = signSessionToken(result.user);
     const res = NextResponse.json({ user: result.publicUser, token });
-    res.cookies.set(
-      SESSION_COOKIE_NAME,
-      token,
-      getCookieOptions(req, 60 * 60 * 24 * 7)
-    );
+    try {
+      res.cookies.set(
+        SESSION_COOKIE_NAME,
+        token,
+        getCookieOptions(req, 60 * 60 * 24 * 7)
+      );
+    } catch (cookieErr) {
+      console.warn('[auth/login] Failed to set session cookie:', cookieErr);
+    }
     return res;
-  } catch {
+  } catch (err) {
+    console.error('[auth/login] Unexpected error:', err);
     return NextResponse.json({ error: 'Authentication failed.' }, { status: 500 });
   }
 }
