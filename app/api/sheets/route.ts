@@ -1,22 +1,11 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { fetchLiveSpreadsheet } from '@/lib/sheets';
-import {
-  extractTokenFromRequest,
-  recordSpreadsheetSyncIfChanged,
-  verifySessionToken,
-} from '@/lib/store';
+import { recordSpreadsheetSyncIfChanged } from '@/lib/store';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-export async function GET(req: NextRequest) {
-  const user = verifySessionToken(extractTokenFromRequest(req));
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
-  const manual = req.nextUrl.searchParams.get('manual') === '1';
-
+export async function GET() {
   try {
     const snapshot = await fetchLiveSpreadsheet();
     const rekap = snapshot.tabs.find((t) => t.meta.isSummary);
@@ -31,8 +20,6 @@ export async function GET(req: NextRequest) {
       remainingBalance: rekap?.overview?.remainingBalance ?? 0,
       tabCount: snapshot.tabs.length,
       rowCounts,
-      actor: user,
-      manual,
     });
 
     return NextResponse.json(

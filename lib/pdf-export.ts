@@ -2,7 +2,6 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { formatRupiah } from './format';
 import type {
-  ActivityLogEntry,
   Language,
   ParsedSheetTab,
   ReconciliationAdjustment,
@@ -631,67 +630,6 @@ export async function exportAllTabsToPdf(params: {
 
   addFootersToAllPages(doc, lang);
   doc.save(`ISMAYA-PROPERTY-LENGKAP-${new Date().toISOString().slice(0, 10)}.pdf`);
-}
-
-export async function exportActivityLogToPdf(params: {
-  logs: ActivityLogEntry[];
-  lang: Language;
-  timezone: string;
-}) {
-  const { logs, lang, timezone } = params;
-  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-  const logo = await loadLogoDataUrl();
-
-  const generatedStr = `${lang === 'id' ? 'Dicetak' : 'Generated'}: ${formatLocalTimestamp(
-    new Date().toISOString(),
-    lang,
-    timezone
-  )} (${timezone})`;
-
-  const startY = drawReportHeader(
-    doc,
-    logo,
-    lang === 'id' ? 'Laporan Log Aktivitas Pengguna & Sinkronisasi' : 'User & Sync Activity Audit Log',
-    lang === 'id' ? 'Audit Keamanan & Perubahan Data Sistem' : 'System Security & Data Change Audit Trail',
-    generatedStr
-  );
-
-  autoTable(doc, {
-    startY,
-    head: [
-      [
-        'No',
-        lang === 'id' ? 'Waktu Lokal' : 'Local Time',
-        lang === 'id' ? 'Pengguna' : 'User',
-        lang === 'id' ? 'Kategori' : 'Category',
-        lang === 'id' ? 'Aktivitas' : 'Activity',
-        lang === 'id' ? 'Detail' : 'Details',
-      ],
-    ],
-    body: logs.map((log, i) => [
-      String(i + 1),
-      formatLocalTimestamp(log.timestamp, lang, timezone),
-      `${log.actorDisplayName} (@${log.actorUsername})`,
-      log.category,
-      log.description,
-      log.details || '-',
-    ]),
-    theme: 'striped',
-    styles: { fontSize: 8, cellPadding: 2.5 },
-    headStyles: { fillColor: [17, 24, 39], textColor: [255, 255, 255] },
-    columnStyles: {
-      0: { cellWidth: 10, halign: 'center' },
-      1: { cellWidth: 42 },
-      2: { cellWidth: 45 },
-      3: { cellWidth: 30 },
-      4: { cellWidth: 78 },
-      5: { cellWidth: 64 },
-    },
-    margin: { left: 14, right: 14, bottom: 20 },
-  });
-
-  addFootersToAllPages(doc, lang);
-  doc.save(`ISMAYA-PROPERTY-ACTIVITY-LOG-${new Date().toISOString().slice(0, 10)}.pdf`);
 }
 
 export async function exportReconciliationToPdf(params: {

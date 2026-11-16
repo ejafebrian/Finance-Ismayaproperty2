@@ -11,13 +11,11 @@ import {
   SlidersHorizontal,
   X,
 } from 'lucide-react';
-import { authFetch } from '@/lib/client-auth';
 import { formatRupiah } from '@/lib/format';
 import { getCopy } from '@/lib/i18n';
 import { exportReconciliationToPdf } from '@/lib/pdf-export';
 import type {
   Language,
-  PublicUser,
   ReconciliationAdjustment,
   ReconciliationCheckItem,
   SpreadsheetSnapshot,
@@ -26,7 +24,6 @@ import type {
 interface ReconciliationPanelProps {
   snapshot: SpreadsheetSnapshot;
   adjustments: ReconciliationAdjustment[];
-  currentUser: PublicUser;
   lang: Language;
   timezone: string;
   onAdjustmentsChange: (next: ReconciliationAdjustment[]) => void;
@@ -46,7 +43,6 @@ function calcMatchPercent(expectedAmount: number, actualAmount: number): number 
 export default function ReconciliationPanel({
   snapshot,
   adjustments,
-  currentUser,
   lang,
   timezone,
   onAdjustmentsChange,
@@ -54,7 +50,6 @@ export default function ReconciliationPanel({
 }: ReconciliationPanelProps) {
   const copy = getCopy(lang);
   const [filter, setFilter] = useState<FilterMode>('all');
-  const [localSimulations, setLocalSimulations] = useState<ReconciliationAdjustment[]>([]);
 
   // Modal state
   const [editingCheck, setEditingCheck] = useState<ReconciliationCheckItem | null>(null);
@@ -66,18 +61,8 @@ export default function ReconciliationPanel({
   const [saving, setSaving] = useState(false);
   const [modalError, setModalError] = useState('');
 
-  const effectiveAdjustments = useMemo(() => {
-    if (currentUser.role === 'admin') return adjustments;
-    // Merge persisted adjustments with local simulation overrides for staff
-    const map = new Map(adjustments.map((a) => [a.checkId, a]));
-    for (const sim of localSimulations) {
-      map.set(sim.checkId, sim);
-    }
-    return [...map.values()];
-  }, [adjustments, currentUser.role, localSimulations]);
-
   const enrichedChecks = useMemo(() => {
-    const adjMap = new Map(effectiveAdjustments.map((a) => [a.checkId, a]));
+    const adjMap = new Map(adjustments.map((a) => [a.checkId, a]));
     return snapshot.reconciliation.checks.map((check) => {
       const adj = adjMap.get(check.id) || null;
       const adjustedActual = check.actualAmount + (adj ? adj.nominalDelta : 0);
@@ -97,7 +82,7 @@ export default function ReconciliationPanel({
         isAdjusted: Boolean(adj),
       };
     });
-  }, [snapshot.reconciliation.checks, effectiveAdjustments]);
+  }, [snapshot.reconciliation.checks, adjustments]);
 
   const summaryStats = useMemo(() => {
     const total = enrichedChecks.length;
@@ -117,9 +102,9 @@ export default function ReconciliationPanel({
       netAbsDiff,
       allKlop,
       overallPercent: allKlop ? 100 : Math.min(99.99, avgPercent),
-      activeCount: effectiveAdjustments.length,
+      activeCount: adjustments.length,
     };
-  }, [enrichedChecks, effectiveAdjustments.length]);
+  }, [enrichedChecks, adjustments.length]);
 
   const filteredChecks = useMemo(() => {
     return enrichedChecks.filter((item) => {
@@ -207,28 +192,9 @@ export default function ReconciliationPanel({
     if (!editingCheck || !previewValues) return;
     setModalError('');
 
-    if (currentUser.role !== 'admin') {
-      const simEntry: ReconciliationAdjustment = {
-        id: `sim_${editingCheck.id}`,
-        checkId: editingCheck.id,
-        mode: adjMode,
-        percentValue: previewValues.pct,
-        nominalDelta: previewValues.delta,
-        reason: reason.trim() || 'Simulasi penyesuaian persentase',
-        updatedAt: new Date().toISOString(),
-        updatedBy: currentUser.username,
-      };
-      setLocalSimulations((prev) => [
-        ...prev.filter((p) => p.checkId !== editingCheck.id),
-        simEntry,
-      ]);
-      setEditingCheck(null);
-      return;
-    }
-
     setSaving(true);
     try {
-      const res = await authFetch('/api/reconciliation', {
+      const res = await fetch('/api/reconciliation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -257,12 +223,8 @@ export default function ReconciliationPanel({
   };
 
   const handleResetAdjustment = async (checkId: string) => {
-    if (currentUser.role !== 'admin') {
-      setLocalSimulations((prev) => prev.filter((p) => p.checkId !== checkId));
-      return;
-    }
     try {
-      const res = await authFetch(
+      const res = await fetch(
         `/api/reconciliation?checkId=${encodeURIComponent(checkId)}`,
         { method: 'DELETE' }
       );
@@ -278,23 +240,10 @@ export default function ReconciliationPanel({
   const handleDownloadPdf = async () => {
     await exportReconciliationToPdf({
       snapshot,
-      adjustments: effectiveAdjustments,
+      adjustments,
       lang,
       timezone,
     });
-    try {
-      await authFetch('/api/logs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          category: 'export',
-          action: 'EXPORT_RECONCILIATION_PDF',
-          description: `Mengunduh PDF Laporan Rekonsiliasi (${summaryStats.klopCount}/${summaryStats.total} klop).`,
-        }),
-      });
-    } catch {
-      // ignore non-blocking log error
-    }
   };
 
   return (
@@ -708,12 +657,6 @@ export default function ReconciliationPanel({
                 <X className="w-4 h-4" />
               </button>
             </div>
-
-            {currentUser.role !== 'admin' && (
-              <div className="mb-4 px-3 py-2 text-xs rounded-lg border border-amber-200 dark:border-amber-900/60 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300">
-                {copy.reconciliation.staffReadOnlyHint}
-              </div>
-            )}
 
             <form onSubmit={handleSaveAdjustment} className="space-y-4">
               {/* Mode Toggle + Quick 100% Klop Button */}

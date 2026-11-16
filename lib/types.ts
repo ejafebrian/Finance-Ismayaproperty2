@@ -1,6 +1,5 @@
 export type Language = 'id' | 'en';
 export type ThemeMode = 'light' | 'dark';
-export type UserRole = 'admin' | 'staff';
 
 export interface SheetTabMeta {
   name: string;
@@ -124,35 +123,4 @@ export interface SpreadsheetSnapshot {
   signature: string;
   tabs: ParsedSheetTab[];
   reconciliation: ReconciliationSummary;
-}
-
-export interface PublicUser {
-  id: string;
-  username: string;
-  displayName: string;
-  role: UserRole;
-  active: boolean;
-  createdAt: string;
-  updatedAt: string;
-  lastLoginAt: string | null;
-}
-
-export type ActivityCategory =
-  | 'auth'
-  | 'credentials'
-  | 'user_management'
-  | 'spreadsheet_sync'
-  | 'export'
-  | 'reconciliation';
-
-export interface ActivityLogEntry {
-  id: string;
-  timestamp: string;
-  actorUsername: string;
-  actorDisplayName: string;
-  actorRole: UserRole | 'system';
-  category: ActivityCategory;
-  action: string;
-  description: string;
-  details?: string;
 }
